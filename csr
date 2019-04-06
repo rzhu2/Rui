@@ -1,0 +1,57 @@
+__device__  void  SpMV_CSR_adaptiveTPR
+(SubCSR csr , const  double* __restrict__ x, double  alpha , double *y, double  beta , int  EC_BOUNDARY)
+{
+      __shared__   double  sd1[GPU_BLOCKSIZE ];
+      
+     const  int  tid   = threadIdx.x;
+     const  int  bid   = blockIdx.x - EC_BOUNDARY;
+     const  int  bDim = blockDim.x;
+     
+     __shared__  int   ib, TPR , NROWB , rstride;
+     
+     int *gbmark = csr.gbmark;
+     int *rmark   = csr.rmark;
+     
+     if (tid < csr.np ) {
+        if (bid  >= gbmark[tid] && bid < gbmark[tid +1])
+        {
+            ib   = tid;
+            TPR = GPU_BLOCKSIZE / pow2( csr.np - 1 - ib );
+            NROWB    = rmark[ib+1] - rmark[ib];
+            rstride = bDim * (gbmark[ib+1] - gbmark[ib]) / TPR;
+        }
+     }
+     __syncthreads ();
+     
+     int irc= rmark[ib];
+     int ivstart = csr.i[ irc ] - csr.i[ 0 ];
+     int *iib= csr.i    + irc;
+     int *idxb= csr.j    + ivstart;
+     double *vb= csr.as   + ivstart;
+     double *yb= y+ irc;
+     
+     int  row_id = ( bDim * ( bid - gbmark[ib] ) + tid ) / TPR;
+     int  thread_lane = tid % TPR;
+     
+     for(int  row = row_id; row < NROWB; row +=  rstride) {
+         int n   = iib[row] - iib [0];
+         double *v0    = vb +   n;
+         int*idxp = idxb + n;
+         double  sum = 0.0;
+         for (int j = thread_lane; j < iib[row+1] - iib[row]; j += TPR) {
+         sum += v0[j]*x[idxp[j]];
+         }
+         
+         sd1[tid] = sum;
+         __syncthreads ();
+         
+         int i = TPR  >> 1;
+         while(i > 0) {
+            if(thread_lane  < i) sd1[tid] += sd1[tid + i];
+            __syncthreads ();
+            i  >>= 1;
+         }
+         
+         if (thread_lane  == 0) yb[row] = beta * yb[row] + alpha * sd1[tid];
+     }
+}
