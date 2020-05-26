@@ -1,0 +1,40 @@
+__device__  void  SpMV_ELL_adaptive2
+(SubELL ell , const  double* __restrict__ x, double  alpha , double *y, double  beta )
+{
+   const  int  tid   = threadIdx.x;
+   const  int  bid   = blockIdx.x;
+   const  int  bDim = blockDim.x;
+   __shared__  int   ib, ivstart , vlen , NROWB , rstride;
+  
+   int *gbmark = ell.gbmark;
+   int *rmark    = ell.rmark;
+  
+    if ( tid < ell.np) {
+      if ( bid  >= gbmark[tid] && bid < gbmark[tid+1] )
+      {
+        ib  = tid;
+        ivstart = ell.bnz[ib];
+        NROWB    = rmark[ib+1] - rmark[ib];
+        rstride = bDim * (gbmark[ib+1] - gbmark[ib]);
+        vlen= ell.clen[ib] * NROWB;
+     }
+  }
+  __syncthreads ();
+
+  double *yb    = y    + rmark[ib];
+  double *vb    = ell.as + ivstart;
+  int*idxb = ell.j   + ivstart;
+  int  row_id    = bDim * ( bid - gbmark[ib] ) + tid;
+
+  int*idx1;
+  double *v1;
+  for ( int  row = row_id; row < NROWB; row +=  rstride ) {
+    v1    = vb    + row;
+    idx1 = idxb + row;
+    double  sum1 = 0.0;
+    for (int j = 0; j < vlen; j += NROWB) {
+      sum1 += v1[j] * x[idx1[j]];
+    }
+    yb[row] = beta * yb[row] + alpha * sum1;
+  }
+}
